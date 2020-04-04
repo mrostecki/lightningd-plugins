@@ -119,7 +119,6 @@ class Backend(object):
             if c.transaction is not None:
                 self._restore_transaction(c.transaction)
 
-
 class FileBackend(Backend):
     def __init__(self, destination: str, create: bool):
         self.version = None
@@ -139,6 +138,15 @@ class FileBackend(Backend):
             return False
         return self.read_metadata()
 
+    def path_metadata(self):
+        return self.url.path
+
+    def path_current(self):
+        return self.url.path
+
+    def path_stream(self):
+        return self.url.path
+
     def write_metadata(self):
         blob = struct.pack("!IIQIQQ", 0x01, self.version, self.offsets[0],
                            self.prev_version, self.offsets[1],
@@ -146,15 +154,15 @@ class FileBackend(Backend):
 
         # Pad the header
         blob += b'\x00' * (512 - len(blob))
-        mode = "rb+" if os.path.exists(self.url.path) else "wb+"
+        mode = "rb+" if os.path.exists(self.path_metadata()) else "wb+"
 
-        with open(self.url.path, mode) as f:
+        with open(self.path_metadata(), mode) as f:
             f.seek(0)
             f.write(blob)
             f.flush()
 
     def read_metadata(self):
-        with open(self.url.path, 'rb') as f:
+        with open(self.path_metadata(), 'rb') as f:
             blob = f.read(512)
             if len(blob) != 512:
                 logging.warn("Corrupt FileBackend header, expected 512 bytes, got {} bytes".format(len(blob)))
@@ -178,7 +186,7 @@ class FileBackend(Backend):
 
         length = struct.pack("!I", len(payload))
         version = struct.pack("!I", entry.version)
-        with open(self.url.path, 'ab') as f:
+        with open(self.path_current(), 'ab') as f:
             f.seek(self.offsets[0])
             f.write(length)
             f.write(version)
@@ -207,7 +215,7 @@ class FileBackend(Backend):
     def stream_changes(self) -> Iterator[Change]:
         self.read_metadata()
         version = -1
-        with open(self.url.path, 'rb') as f:
+        with open(self.path_stream(), 'rb') as f:
             # Skip the header
             f.seek(512)
             while version < self.version:
@@ -226,9 +234,43 @@ class FileBackend(Backend):
 
 
 
+class PartialFileBackend(FileBackend):
+    def initialize(self) -> bool:
+        if len(os.listdir(self.working_dir())) == 0:
+            self.version = 0
+            self.prev_version = 0
+            return False
+        return self.read_metadata()
+
+    def working_dir(self):
+        return os.path.dirname(self.url.path)
+
+    def path_metadata(self):
+        return "{}.0".format(self.url.path)
+
+    def path_current(self):
+        return "{}.{}".format(self.url.path, self.version)
+
+    def path_stream(self):
+        return self.url.path
+
+    def stream_changes(self) -> Iterator[Change]:
+        if os.path.exists(self.path_stream()):
+            os.remove(self.path_stream())
+        files = sorted(os.listdir(self.working_dir()),
+                       key=lambda x: int(x.split(".")[-1]))
+        with open(self.path_stream(), 'wb') as f:
+            for partial in files:
+                with open(os.path.join(self.working_dir(), partial), 'rb') as fp:
+                    f.write(fp.read())
+        return super().stream_changes()
+
+
+
 def resolve_backend_class(backend_url):
     backend_map: Mapping[str, Type[Backend]] = {
         'file': FileBackend,
+        'partial': PartialFileBackend,
     }
     p = urlparse(backend_url)
     backend_cl = backend_map.get(p.scheme, None)

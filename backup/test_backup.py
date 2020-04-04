@@ -72,9 +72,9 @@ def nf(request, directory, test_name, bitcoind, executor, db_provider, node_cls)
     ok, errs = nf.killall([not n.may_fail for n in nf.nodes])
 
 
-def test_start(nf, directory):
+def _test_start(nf, directory, scheme):
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
-    bdest = 'file://' + os.path.join(bpath, 'backup.dbak')
+    bdest = scheme + os.path.join(bpath, 'backup.dbak')
     os.makedirs(bpath)
     subprocess.check_call([cli_path, "init", bpath, bdest])
     opts = {
@@ -91,7 +91,15 @@ def test_start(nf, directory):
         l1.daemon.wait_for_log(r'Versions match up')
 
 
-def test_start_no_init(nf, directory):
+def test_start(nf, directory):
+    _test_start(nf, directory, "file://")
+
+
+def test_start_partial(nf, directory):
+    _test_start(nf, directory, "partial://")
+
+
+def _test_start_no_init(nf, directory, scheme):
     """The plugin should refuse to start if we haven't initialized the backup
     """
     bpath = os.path.join(directory, 'lightning-1', 'regtest')
@@ -112,6 +120,14 @@ def test_start_no_init(nf, directory):
     assert(l1.daemon.is_in_log(
         r'Could not find backup.lock in the lightning-dir'
     ))
+
+
+def test_start_no_init(nf, directory):
+    _test_start_no_init(nf, directory, "file://")
+
+
+def test_start_no_init_partial(nf, directory):
+    _test_start_no_init(nf, directory, "partial://")
 
 
 def test_init_not_empty(nf, directory):
