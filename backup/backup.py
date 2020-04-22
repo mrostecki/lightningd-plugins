@@ -10,9 +10,12 @@ import os
 import struct
 import sys
 import sqlite3
+import gnupg
 
 
 plugin = Plugin()
+
+gpg = gnupg.GPG()
 
 root = logging.getLogger()
 root.setLevel(logging.DEBUG)
@@ -232,6 +235,30 @@ class FileBackend(Backend):
                 raise ValueError("Versions do not match up: restored version {}, backend version {}".format(version, self.version))
             assert(version == self.version)
 
+
+class GPGMixin(object):
+    def decrypt_file(self, filename):
+        with open(filename, 'rb') as f:
+            # I would love to use gpg.decrypt_file as it seems to handle
+            # buffering properly, but it's crashing on Python 3.8...
+            content = self.gpg.decrypt(f.read()).data
+        with open(filename, 'wb') as f:
+            f.write(content)
+
+    def encrypt_file(self, filename):
+        with open(filename, 'rb') as f:
+            content = f.read()
+        with open(filename, 'wb') as f:
+            f.write(self.gpg.encrypt(content, gpg_key).data)
+            
+    def write_metadata(self):
+        super().write_metadata()
+        self.encrypt_file(self.path_metadata())
+
+    def add_change(self, entry: Change) -> bool:
+        res = super().add_change(entry)
+        self.encrypt_file(self.path_current())
+        return res
 
 
 class PartialFileBackend(FileBackend):
