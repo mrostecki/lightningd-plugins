@@ -132,6 +132,21 @@ class FileBackend(Backend):
         if os.path.exists(self.url.path) and create:
             raise ValueError("Attempted to create a FileBackend, but file already exists.")
 
+    def path_metadata(self):
+        """Path of the file where metadata are stored.
+        """
+        return self.url.path
+
+    def path_change(self):
+        """Path of the file where the particular change is stored.
+        """
+        return self.url.path
+
+    def path_stream(self):
+        """Path of the file from which changes to restore are streamed.
+        """
+        return self.url.path
+
     def initialize(self) -> bool:
         if not os.path.exists(self.url.path):
             self.version = 0
@@ -146,15 +161,15 @@ class FileBackend(Backend):
 
         # Pad the header
         blob += b'\x00' * (512 - len(blob))
-        mode = "rb+" if os.path.exists(self.url.path) else "wb+"
+        mode = "rb+" if os.path.exists(self.path_metadata()) else "wb+"
 
-        with open(self.url.path, mode) as f:
+        with open(self.path_metadata(), mode) as f:
             f.seek(0)
             f.write(blob)
             f.flush()
 
     def read_metadata(self):
-        with open(self.url.path, 'rb') as f:
+        with open(self.path_metadata(), 'rb') as f:
             blob = f.read(512)
             if len(blob) != 512:
                 logging.warn("Corrupt FileBackend header, expected 512 bytes, got {} bytes".format(len(blob)))
@@ -178,7 +193,7 @@ class FileBackend(Backend):
 
         length = struct.pack("!I", len(payload))
         version = struct.pack("!I", entry.version)
-        with open(self.url.path, 'ab') as f:
+        with open(self.path_change(), 'ab') as f:
             f.seek(self.offsets[0])
             f.write(length)
             f.write(version)
@@ -207,7 +222,7 @@ class FileBackend(Backend):
     def stream_changes(self) -> Iterator[Change]:
         self.read_metadata()
         version = -1
-        with open(self.url.path, 'rb') as f:
+        with open(self.path_stream(), 'rb') as f:
             # Skip the header
             f.seek(512)
             while version < self.version:
