@@ -152,15 +152,19 @@ class FileBackend(Backend):
             self.version = 0
             self.prev_version = 0
             return False
-        return self.read_metadata()
+        return self.fetch_metadata()
 
-    def write_metadata(self):
+    def metadata_blob(self) -> bytes:
         blob = struct.pack("!IIQIQQ", 0x01, self.version, self.offsets[0],
                            self.prev_version, self.offsets[1],
                            self.version_count)
 
         # Pad the header
         blob += b'\x00' * (512 - len(blob))
+        return blob
+
+    def write_metadata(self):
+        blob = self.metadata_blob()
         mode = "rb+" if os.path.exists(self.path_metadata()) else "wb+"
 
         with open(self.path_metadata(), mode) as f:
@@ -168,23 +172,27 @@ class FileBackend(Backend):
             f.write(blob)
             f.flush()
 
-    def read_metadata(self):
+    def read_metadata(self) -> bytes:
         with open(self.path_metadata(), 'rb') as f:
-            blob = f.read(512)
-            if len(blob) != 512:
-                logging.warn("Corrupt FileBackend header, expected 512 bytes, got {} bytes".format(len(blob)))
-                return False
+            return f.read(512)
 
-            file_version, = struct.unpack_from("!I", blob)
-            if file_version != 1:
-                logging.warn("Unknown FileBackend version {}".format(file_version))
-                return False
+    def fetch_metadata(self) -> bool:
+        blob = self.read_metadata()
 
-            self.version, self.offsets[0], self.prev_version, self.offsets[1], self.version_count, = struct.unpack_from("!IQIQQ", blob, offset=4)
+        if len(blob) != 512:
+            logging.warn("Corrupt FileBackend header, expected 512 bytes, got {} bytes".format(len(blob)))
+            return False
+
+        file_version, = struct.unpack_from("!I", blob)
+        if file_version != 1:
+            logging.warn("Unknown FileBackend version {}".format(file_version))
+            return False
+
+        self.version, self.offsets[0], self.prev_version, self.offsets[1], self.version_count, = struct.unpack_from("!IQIQQ", blob, offset=4)
 
         return True
 
-    def add_change(self, entry: Change) -> bool:
+    def change_blob(self, entry: Change) -> bytes:
         typ = b'\x01' if entry.snapshot is None else b'\x02'
         if typ == b'\x01':
             payload = b'\x00'.join([t.encode('UTF-8') for t in entry.transaction])
@@ -193,15 +201,26 @@ class FileBackend(Backend):
 
         length = struct.pack("!I", len(payload))
         version = struct.pack("!I", entry.version)
+
+        i = io.BytesIO()
+        i.write(length)
+        i.write(version)
+        i.write(typ)
+        i.write(payload)
+
+        self.prev_version, self.offsets[1] = self.version, self.offsets[0]
+        self.version = entry.version
+        self.offsets[0] += 9 + len(payload)
+
+        i.seek(0)
+        return i.read()
+
+    def add_change(self, entry: Change) -> bool:
+        blob = self.change_blob(entry)
         with open(self.path_change(), 'ab') as f:
             f.seek(self.offsets[0])
-            f.write(length)
-            f.write(version)
-            f.write(typ)
-            f.write(payload)
-            self.prev_version, self.offsets[1] = self.version, self.offsets[0]
-            self.version = entry.version
-            self.offsets[0] += 9 + len(payload)
+            f.write(blob)
+
         self.write_metadata()
 
         return True
@@ -220,7 +239,7 @@ class FileBackend(Backend):
         return True
 
     def stream_changes(self) -> Iterator[Change]:
-        self.read_metadata()
+        self.fetch_metadata()
         version = -1
         with open(self.path_stream(), 'rb') as f:
             # Skip the header
