@@ -10,6 +10,7 @@ import os
 import struct
 import sys
 import sqlite3
+import io
 
 
 plugin = Plugin()
@@ -238,10 +239,13 @@ class FileBackend(Backend):
         self.prev_version, self.offsets[1] = 0, 0
         return True
 
+    def stream_io(self) -> io.IOBase:
+        return open(self.path_stream(), 'rb')
+
     def stream_changes(self) -> Iterator[Change]:
         self.fetch_metadata()
         version = -1
-        with open(self.path_stream(), 'rb') as f:
+        with self.stream_io() as f:
             # Skip the header
             f.seek(512)
             while version < self.version:
